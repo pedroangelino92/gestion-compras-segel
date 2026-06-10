@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Función: comprueba si la persona ha iniciado sesión con su correo o no
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Función: va a buscar el documento real del usuario en la base de datos
+    function getUserData() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.token.email)).data;
+    }
+
+    // Función: verifica si el usuario existe y si su estado es activo = true
+    function isActiveUser() {
+      return isAuth() && exists(/databases/$(database)/documents/usuarios/$(request.auth.token.email)) 
+             && getUserData().activo == true;
+    }
+
+    // Función: verifica si el usuario es administrador
+    function isAdmin() {
+      return isActiveUser() && (getUserData().rol == 'SUPER_ADMIN' || getUserData().rol == 'ADMIN');
+    }
+
+    // ===============================================
+    // SEGURIDAD DE USUARIOS
+    // ===============================================
+    match /usuarios/{email} {
+      // Todo el que inicie sesión puede leer la lista de usuarios (necesario para asignar tickets)
+      allow read: if isAuth(); 
+      
+      // Para registrase, ellos mismos pueden crear su cuenta, pero la regla obliga
+      // a que el valor de "activo" sea forzosamente FALSE. 
+      // Los Admins pueden crear usuarios libremente.
+      allow create: if isAuth() && (
+        (request.auth.token.email == email && request.resource.data.activo == false) || 
+        isAdmin()
+      );
+      
+      // Solo administradores pueden cambiar roles, bloquear o modificar datos de otros
+      allow update, delete: if isAdmin();
+    }
+
+    // ===============================================
+    // SEGURIDAD DE LA BASE DE DATOS DE COMPRAS
+    // ===============================================
+    match /pedidos/{pedido} {
+      // Bloqueo absoluto: Si no eres un usuario activo (activo == true),
+      // Firebase escupe error y bloquea toda lectura y escritura.
+      allow read, write: if isActiveUser();
+    }
+
+    // ===============================================
+    // SEGURIDAD DE PROVEEDORES
+    // ===============================================
+    match /proveedores_list/{proveedorId} {
+      // Cualquier usuario activo puede listar, crear y editar proveedores
+      // ya que los compradores necesitan poder asignarlos. 
+      allow read, write: if isActiveUser();
+    }
+
+    // ===============================================
+    // SEGURIDAD DE LA PAPELERA DE RECICLAJE
+    // ===============================================
+    match /pedidos_eliminados/{docId} {
+      // Solo admins pueden ver este basurero, pero cualquier usuario activo puede
+      // agregar un registro aquí si elimina una línea mediante la app.
+      allow read, update, delete: if isAdmin();
+      allow create: if isActiveUser();
+    }
+
+    // ===============================================
+    // SEGURIDAD DE NOTIFICACIONES (¡NUEVO!)
+    // ===============================================
+    match /notificaciones/{notifId} {
+      // Cualquier usuario activo puede crear notificaciones (al mencionar),
+      // así como leer, actualizar (marcar leídas) y eliminar.
+      allow read, write: if isActiveUser();
+    }
+  }
+}
